@@ -155,11 +155,11 @@ msg() { echo -e "\n[ODOO-SETUP] $*\n"; }
 
 require_cmd() {
   for c in "$@"; do
-    command -v "$c" >/dev/null 2>&1 || { echo "[ERROR] Falta comando: $c" >&2; exit 1; }
+    command -v "$c" >/dev/null 2>&1 || { echo "[ERROR] Comando requerido no encontrado: $c" >&2; exit 1; }
   done
 }
 
-# El propio script se asegura de tener todo lo necesario
+# IMPORTANTE: aquí NO debe aparecer 'pct'
 require_cmd apt-get curl wget openssl git
 
 ODOO_DOMAIN="${ODOO_DOMAIN:-}"
@@ -231,35 +231,26 @@ chown "${ODOO_USER}:${ODOO_USER}" "${LOG_DIR}"
 msg "Creando fichero de configuración de Odoo..."
 cat > "${ODOO_CONF}" <<EOF_CONF
 [options]
-; Puerto HTTP interno de Odoo
 http_port = 8069
-; Modo proxy (detrás de Nginx)
 proxy_mode = True
 
-; DB
 db_host = False
 db_port = False
 db_user = ${ODOO_DB_USER}
 db_password = ${ODOO_DB_PASS}
 ; db_name = ${ODOO_DB_NAME}
 
-; admin_password para creación de bases
 admin_passwd = ${ODOO_ADMIN_PASS}
 
-; rutas
 addons_path = ${ODOO_HOME}/src/odoo/addons,${ODOO_HOME}/custom-addons
 
-; workers y tiempo real (producción pequeña/mediana)
 workers = 4
 limit_time_cpu = 120
 limit_time_real = 120
 max_cron_threads = 2
 
-; logging
 logfile = ${LOG_DIR}/odoo19.log
 log_level = info
-
-; seguridad
 limit_time_real_cron = 120
 EOF_CONF
 
@@ -304,7 +295,6 @@ upstream odoo19_backend {
     server 127.0.0.1:8069;
 }
 
-# Odoo 19 con websocket (Conversaciones) en el mismo puerto interno
 server {
     listen 80;
     server_name ${SERVER_NAME};
@@ -314,13 +304,11 @@ server {
     proxy_send_timeout 720s;
     keepalive_timeout 120s;
 
-    # Cabeceras proxy
     proxy_set_header X-Forwarded-Host \$host;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
     proxy_set_header X-Real-IP \$remote_addr;
 
-    # Websocket / Conversaciones (Odoo 19)
     location /websocket {
         proxy_pass http://127.0.0.1:8069/websocket;
         proxy_http_version 1.1;
@@ -328,7 +316,6 @@ server {
         proxy_set_header Connection "upgrade";
     }
 
-    # Resto de tráfico HTTP
     location / {
         proxy_pass http://odoo19_backend;
         proxy_redirect off;
@@ -374,6 +361,7 @@ chmod 600 "${CRED_FILE}"
 
 msg "Credenciales guardadas en ${CRED_FILE}"
 EOF_INNER
+
 
 pct exec "$CTID" -- chmod +x "${LXC_SCRIPT}"
 
