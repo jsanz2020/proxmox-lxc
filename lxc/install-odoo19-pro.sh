@@ -1,28 +1,233 @@
 #!/usr/bin/env bash
-set -e
+# Instalador interno Odoo 19 (Debian 13 LXC)
+# - Crea usuario de sistema odoo19
+# - Crea servicio systemd odoo19.service
+# - Configura Nginx como reverse proxy (80 -> Odoo 8069 + /websocket)
 
-# Leer variables de entorno (las pondrá el script de Proxmox)
-ODOO_DOMAIN="${ODOO_DOMAIN:-odoo19.local}"
-ODOO_DB_PASS="${ODOO_DB_PASS:-$(openssl rand -base64 24)}"
-ODOO_ADMIN_PASS="${ODOO_ADMIN_PASS:-$(openssl rand -base64 24)}"
+set -euo pipefail
 
-# Aquí irán todos los pasos de instalación que ya hemos ido diseñando:
-# - apt update / full-upgrade
-# - locales, ssh
-# - postgresql, python/venv, git, nginx, wkhtmltopdf
-# - odoo.conf, systemd, nginx 8069/8072, etc.
+msg() { echo -e "\n[ODOO-SETUP] $*\n"; }
 
-# De momento, solo para probar flujo:
-echo "Dominio: $ODOO_DOMAIN"
-echo "DB pass: $ODOO_DB_PASS"
-echo "Admin pass: $ODOO_ADMIN_PASS"
+require_cmd() {
+  for c in "$@"; do
+    command -v "$c" >/dev/null 2>&1 || { echo "[ERROR] Falta comando: $c" >&2; exit 1; }
+  done
+}
 
-# Guardar credenciales
-cat > /root/odoo19-credentials.txt <<EOF
-Dominio Odoo: $ODOO_DOMAIN
-DB user: odoo
-DB pass: $ODOO_DB_PASS
-admin_passwd: $ODOO_ADMIN_PASS
-EOF
-chmod 600 /root/odoo19-credentials.txt
+require_cmd apt-get curl wget openssl git python3 python3-venv python3-pip
+
+# Variables recibidas del script Proxmox (export ODOO_DOMAIN, ODOO_DB_NAME, etc.)
+ODOO_DOMAIN="${ODOO_DOMAIN:-}"
+ODOO_DB_NAME="${ODOO_DB_NAME:-odoo19}"
+ODOO_DB_PASS="${ODOO_DB_PASS:-}"
+ODOO_ADMIN_PASS="${ODOO_ADMIN_PASS:-}"
+
+ODOO_DB_USER="odoo19"
+ODOO_USER="odoo19"
+ODOO_HOME="/opt/odoo19"
+ODOO_REPO="https://github.com/odoo/odoo.git"
+ODOO_BRANCH="19.0"
+ODOO_CONF="/etc/odoo19.conf"
+ODOO_SERVICE="/etc/systemd/system/odoo19.service"
+LOG_DIR="/var/log/odoo"
+WKHTML_PKG="wkhtmltopdf"
+
+if [[ -z "$ODOO_DB_PASS" || -z "$ODOO_ADMIN_PASS" ]]; then
+  echo "[ERROR] Variables ODOO_DB_PASS y ODOO_ADMIN_PASS no pueden estar vacías."
+  exit 1
+fi
+
+msg "Actualizando sistema..."
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get -y full-upgrade
+
+msg "Instalando paquetes base..."
+apt-get install -y sudo gnupg2 ca-certificates lsb-release locales curl wget git \
+  python3 python3-venv python3-pip build-essential \
+  libxml2-dev libxslt1-dev libldap2-dev libsasl2-dev \
+  libjpeg-dev libpq-dev libffi-dev libssl-dev zlib1g-dev \
+  postgresql postgresql-contrib \
+  nginx ${WKHTML_PKG}
+
+msg "Configurando locale..."
+sed -i 's/^# *es_ES.UTF-8/es_ES.UTF-8/' /etc/locale.gen
+sed -i 's/^# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
+locale-gen
+update-locale LANG=es_ES.UTF-8
+
+msg "Configurando PostgreSQL y usuario de DB..."
+systemctl enable postgresql
+systemctl start postgresql
+
+sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${ODOO_DB_USER}'" | grep -q 1 || \
+  sudo -u postgres psql -c "CREATE ROLE ${ODOO_DB_USER} WITH LOGIN PASSWORD '${ODOO_DB_PASS}' NOSUPERUSER NOCREATEDB NOCREATEROLE;"
+
+sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${ODOO_DB_NAME}'" | grep -q 1 || \
+  sudo -u postgres psql -c "CREATE DATABASE ${ODOO_DB_NAME} OWNER ${ODOO_DB_USER} ENCODING 'UTF8';"
+
+msg "Creando usuario de sistema y directorios..."
+id -u "${ODOO_USER}" >/dev/null 2>&1 || adduser --system --home "${ODOO_HOME}" --group "${ODOO_USER}"
+mkdir -p "${ODOO_HOME}"/{custom-addons,src}
+chown -R "${ODOO_USER}:${ODOO_USER}" "${ODOO_HOME}"
+
+msg "Clonando código de Odoo 19 (rama ${ODOO_BRANCH})..."
+sudo -u "${ODOO_USER}" git clone --depth 1 -b "${ODOO_BRANCH}" "${ODOO_REPO}" "${ODOO_HOME}/src/odoo"
+
+msg "Creando entorno virtual Python..."
+sudo -u "${ODOO_USER}" python3 -m venv "${ODOO_HOME}/venv"
+sudo -u "${ODOO_USER}" "${ODOO_HOME}/venv/bin/pip" install --upgrade pip wheel
+sudo -u "${ODOO_USER}" "${ODOO_HOME}/venv/bin/pip" install -r "${ODOO_HOME}/src/odoo/requirements.txt"
+
+msg "Creando directorio de logs..."
+mkdir -p "${LOG_DIR}"
+chown "${ODOO_USER}:${ODOO_USER}" "${LOG_DIR}"
+
+msg "Creando fichero de configuración de Odoo..."
+cat > "${ODOO_CONF}" <<EOF_CONF
+[options]
+; Puerto HTTP interno de Odoo
+http_port = 8069
+; Modo proxy (detrás de Nginx)
+proxy_mode = True
+
+; DB
+db_host = False
+db_port = False
+db_user = ${ODOO_DB_USER}
+db_password = ${ODOO_DB_PASS}
+db_name = ${ODOO_DB_NAME}
+
+; admin_password para creación de bases
+admin_passwd = ${ODOO_ADMIN_PASS}
+
+; rutas
+addons_path = ${ODOO_HOME}/src/odoo/addons,${ODOO_HOME}/custom-addons
+
+; workers y tiempo real (producción pequeña/mediana)
+workers = 4
+limit_time_cpu = 120
+limit_time_real = 120
+max_cron_threads = 2
+
+; logging
+logfile = ${LOG_DIR}/odoo19.log
+log_level = info
+
+; seguridad
+limit_time_real_cron = 120
+EOF_CONF
+
+chown "${ODOO_USER}:${ODOO_USER}" "${ODOO_CONF}"
+chmod 640 "${ODOO_CONF}"
+
+msg "Creando servicio systemd para Odoo19..."
+cat > "${ODOO_SERVICE}" <<EOF_SERVICE
+[Unit]
+Description=Odoo 19 Open Source ERP and CRM
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=${ODOO_USER}
+Group=${ODOO_USER}
+ExecStart=${ODOO_HOME}/venv/bin/python ${ODOO_HOME}/src/odoo/odoo-bin \\
+  --config ${ODOO_CONF}
+Restart=always
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF_SERVICE
+
+chmod 644 "${ODOO_SERVICE}"
+systemctl daemon-reload
+systemctl enable odoo19
+systemctl start odoo19
+
+msg "Configurando Nginx como reverse proxy para Odoo19 (8069 + websocket/event)..."
+
+rm -f /etc/nginx/sites-enabled/default || true
+
+SERVER_NAME="${ODOO_DOMAIN}"
+if [[ -z "${SERVER_NAME}" ]]; then
+  SERVER_NAME="_"
+fi
+
+cat > /etc/nginx/sites-available/odoo19.conf <<EOF_NGINX
+upstream odoo19_backend {
+    server 127.0.0.1:8069;
+}
+
+# Odoo 19 con websocket (Conversaciones) en el mismo puerto interno
+server {
+    listen 80;
+    server_name ${SERVER_NAME};
+
+    proxy_read_timeout 720s;
+    proxy_connect_timeout 720s;
+    proxy_send_timeout 720s;
+    keepalive_timeout 120s;
+
+    # Cabeceras proxy
+    proxy_set_header X-Forwarded-Host \$host;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Real-IP \$remote_addr;
+
+    # Websocket / Conversaciones (Odoo 19)
+    location /websocket {
+        proxy_pass http://127.0.0.1:8069/websocket;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    # Resto de tráfico HTTP
+    location / {
+        proxy_pass http://odoo19_backend;
+        proxy_redirect off;
+    }
+
+    access_log /var/log/nginx/odoo19-access.log;
+    error_log  /var/log/nginx/odoo19-error.log;
+}
+EOF_NGINX
+
+ln -sf /etc/nginx/sites-available/odoo19.conf /etc/nginx/sites-enabled/odoo19.conf
+nginx -t
+systemctl restart nginx
+
+msg "Instalación de Odoo19 finalizada."
+
+IP=$(hostname -I | awk '{print $1}')
+CRED_FILE="/root/odoo19-credentials.txt"
+
+cat > "${CRED_FILE}" <<EOF_CREDS
+Odoo 19 instalado correctamente.
+
+Acceso:
+  URL (IP):      http://${IP}/
+  URL (dominio): http://${ODOO_DOMAIN}/
+
+Base de datos:
+  Nombre DB:    ${ODOO_DB_NAME}
+  Usuario DB:   ${ODOO_DB_USER}
+  Password DB:  ${ODOO_DB_PASS}
+
+Odoo admin:
+  Usuario:      admin
+  Password:     ${ODOO_ADMIN_PASS}
+
+Ficheros importantes:
+  Config:       ${ODOO_CONF}
+  Servicio:     ${ODOO_SERVICE}
+  Logs Odoo:    ${LOG_DIR}/odoo19.log
+  Logs Nginx:   /var/log/nginx/odoo19-access.log, /var/log/nginx/odoo19-error.log
+EOF_CREDS
+
+chmod 600 "${CRED_FILE}"
+
+msg "Credenciales guardadas en ${CRED_FILE}"
+
 
