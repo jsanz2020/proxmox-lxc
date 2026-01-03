@@ -3,7 +3,7 @@
 # - Crea usuario de sistema odoo19
 # - Crea servicio systemd odoo19.service
 # - Configura Nginx como reverse proxy (80 -> Odoo 8069 + /websocket)
-# - Crea la base odoo19 en PostgreSQL usando template0; Odoo la inicializa vía asistente (sin db_name fijado)
+# - NO crea ninguna base en PostgreSQL; la base se crea desde el asistente web de Odoo
 
 set -euo pipefail
 
@@ -18,6 +18,7 @@ inner_require_cmd() {
 inner_require_cmd apt-get curl wget openssl git
 
 ODOO_DOMAIN="${ODOO_DOMAIN:-}"
+# ODOO_DB_NAME se mantiene solo como referencia humana en el fichero de credenciales
 ODOO_DB_NAME="${ODOO_DB_NAME:-odoo19}"
 ODOO_DB_PASS="${ODOO_DB_PASS:-}"
 ODOO_ADMIN_PASS="${ODOO_ADMIN_PASS:-}"
@@ -60,11 +61,9 @@ msg "Configurando PostgreSQL y usuario de DB..."
 systemctl enable postgresql
 systemctl start postgresql
 
+# Crear solo el rol/usuario para Odoo, con permiso CREATEDB
 sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${ODOO_DB_USER}'" | grep -q 1 || \
-  sudo -u postgres psql -c "CREATE ROLE ${ODOO_DB_USER} WITH LOGIN PASSWORD '${ODOO_DB_PASS}' NOSUPERUSER NOCREATEDB NOCREATEROLE;"
-
-sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${ODOO_DB_NAME}'" | grep -q 1 || \
-  sudo -u postgres psql -c "CREATE DATABASE ${ODOO_DB_NAME} OWNER ${ODOO_DB_USER} ENCODING 'UTF8' TEMPLATE template0;"
+  sudo -u postgres psql -c "CREATE ROLE ${ODOO_DB_USER} WITH LOGIN PASSWORD '${ODOO_DB_PASS}' NOSUPERUSER CREATEDB NOCREATEROLE;"
 
 msg "Creando usuario de sistema y directorios para Odoo..."
 id -u "${ODOO_USER}" >/dev/null 2>&1 || adduser --system --home "${ODOO_HOME}" --group "${ODOO_USER}"
@@ -93,6 +92,7 @@ db_host = False
 db_port = False
 db_user = ${ODOO_DB_USER}
 db_password = ${ODOO_DB_PASS}
+; La base de datos se crea desde el asistente web, no se fija db_name aquí
 ; db_name = ${ODOO_DB_NAME}
 
 admin_passwd = ${ODOO_ADMIN_PASS}
@@ -197,10 +197,10 @@ Acceso:
   URL (IP):      http://${IP}/
   URL (dominio): http://${ODOO_DOMAIN}/
 
-Base de datos:
-  Nombre DB:    ${ODOO_DB_NAME} (crear desde asistente web)
-  Usuario DB:   ${ODOO_DB_USER}
-  Password DB:  ${ODOO_DB_PASS}
+Base de datos (crear desde asistente web de Odoo):
+  Nombre sugerido: ${ODOO_DB_NAME}
+  Usuario DB:      ${ODOO_DB_USER}  (rol con permiso CREATEDB)
+  Password DB:     ${ODOO_DB_PASS}
 
 Odoo admin (master password):
   admin_passwd (odoo.conf): ${ODOO_ADMIN_PASS}
