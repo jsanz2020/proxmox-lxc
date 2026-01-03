@@ -14,9 +14,9 @@ require_cmd() {
   done
 }
 
-require_cmd apt-get curl wget openssl git python3 python3-venv python3-pip
+# El propio script se asegura de tener todo lo necesario
+require_cmd apt-get curl wget openssl git
 
-# Variables recibidas del script Proxmox (export ODOO_DOMAIN, ODOO_DB_NAME, etc.)
 ODOO_DOMAIN="${ODOO_DOMAIN:-}"
 ODOO_DB_NAME="${ODOO_DB_NAME:-odoo19}"
 ODOO_DB_PASS="${ODOO_DB_PASS:-}"
@@ -37,13 +37,14 @@ if [[ -z "$ODOO_DB_PASS" || -z "$ODOO_ADMIN_PASS" ]]; then
   exit 1
 fi
 
-msg "Actualizando sistema..."
+msg "Actualizando sistema dentro del LXC..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get -y full-upgrade
 
-msg "Instalando paquetes base..."
-apt-get install -y sudo gnupg2 ca-certificates lsb-release locales curl wget git \
+msg "Instalando paquetes base y dependencias Odoo 19..."
+apt-get install -y sudo gnupg2 ca-certificates lsb-release locales \
+  curl wget git \
   python3 python3-venv python3-pip build-essential \
   libxml2-dev libxslt1-dev libldap2-dev libsasl2-dev \
   libjpeg-dev libpq-dev libffi-dev libssl-dev zlib1g-dev \
@@ -66,7 +67,7 @@ sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${ODOO_DB_USER
 sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${ODOO_DB_NAME}'" | grep -q 1 || \
   sudo -u postgres psql -c "CREATE DATABASE ${ODOO_DB_NAME} OWNER ${ODOO_DB_USER} ENCODING 'UTF8';"
 
-msg "Creando usuario de sistema y directorios..."
+msg "Creando usuario de sistema y directorios para Odoo..."
 id -u "${ODOO_USER}" >/dev/null 2>&1 || adduser --system --home "${ODOO_HOME}" --group "${ODOO_USER}"
 mkdir -p "${ODOO_HOME}"/{custom-addons,src}
 chown -R "${ODOO_USER}:${ODOO_USER}" "${ODOO_HOME}"
@@ -229,5 +230,3 @@ EOF_CREDS
 chmod 600 "${CRED_FILE}"
 
 msg "Credenciales guardadas en ${CRED_FILE}"
-
-
