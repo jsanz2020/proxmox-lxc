@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Instalador interno Odoo 19 (Debian 13 LXC)
 # - Crea usuario de sistema odoo19
+# - Crea rol de PostgreSQL para Odoo (CON CREATEDB, sin crear ninguna base)
 # - Crea servicio systemd odoo19.service
-# - Configura Nginx como reverse proxy (80 -> Odoo 8069 + /websocket)
-# - NO crea ninguna base en PostgreSQL; la base se crea desde el asistente web de Odoo
+# - Configura Nginx como reverse proxy:
+#     * HTTP normal -> 8069
+#     * Longpolling / bus -> 8072
+# - La base de datos se crea SIEMPRE desde el asistente web de Odoo 19
 
 set -euo pipefail
 
@@ -18,7 +21,7 @@ inner_require_cmd() {
 inner_require_cmd apt-get curl wget openssl git
 
 ODOO_DOMAIN="${ODOO_DOMAIN:-}"
-# ODOO_DB_NAME se mantiene solo como referencia humana en el fichero de credenciales
+# Solo referencia humana/sugerencia en el fichero de credenciales
 ODOO_DB_NAME="${ODOO_DB_NAME:-odoo19}"
 ODOO_DB_PASS="${ODOO_DB_PASS:-}"
 ODOO_ADMIN_PASS="${ODOO_ADMIN_PASS:-}"
@@ -31,6 +34,9 @@ ODOO_BRANCH="19.0"
 ODOO_CONF="/etc/odoo19.conf"
 ODOO_SERVICE="/etc/systemd/system/odoo19.service"
 LOG_DIR="/var/log/odoo"
+
+LONGPOLLING_PORT=8072
+HTTP_PORT=8069
 
 if [[ -z "$ODOO_DB_PASS" || -z "$ODOO_ADMIN_PASS" ]]; then
   echo "[ERROR] Variables ODOO_DB_PASS y ODOO_ADMIN_PASS no pueden estar vacías."
@@ -61,7 +67,7 @@ msg "Configurando PostgreSQL y usuario de DB..."
 systemctl enable postgresql
 systemctl start postgresql
 
-# Crear solo el rol/usuario para Odoo, con permiso CREATEDB
+# Crear solo el rol/usuario para Odoo, con permiso CREATEDB (sin crear BDs)
 sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${ODOO_DB_USER}'" | grep -q 1 || \
   sudo -u postgres psql -c "CREATE ROLE ${ODOO_DB_USER} WITH LOGIN PASSWORD '${ODOO_DB_PASS}' NOSUPERUSER CREATEDB NOCREATEROLE;"
 
@@ -71,7 +77,9 @@ mkdir -p "${ODOO_HOME}"/{custom-addons,src}
 chown -R "${ODOO_USER}:${ODOO_USER}" "${ODOO_HOME}"
 
 msg "Clonando código de Odoo 19 (rama ${ODOO_BRANCH})..."
-sudo -u "${ODOO_USER}" git clone --depth 1 -b "${ODOO_BRANCH}" "${ODOO_REPO}" "${ODOO_HOME}/src/odoo"
+if [[ ! -d "${ODOO_HOME}/src/odoo" ]]; then
+  sudo -u "${ODOO_USER}" git clone --depth 1 -b "${ODOO_BRANCH}" "${ODOO_REPO}" "${ODOO_HOME}/src/odoo"
+fi
 
 msg "Creando entorno virtual Python..."
 sudo -u "${ODOO_USER}" python3 -m venv "${ODOO_HOME}/venv"
@@ -85,25 +93,32 @@ chown "${ODOO_USER}:${ODOO_USER}" "${LOG_DIR}"
 msg "Creando fichero de configuración de Odoo..."
 cat > "${ODOO_CONF}" <<EOF_CONF
 [options]
-http_port = 8069
+; Puertos
+http_port = ${HTTP_PORT}
 proxy_mode = True
+longpolling_port = ${LONGPOLLING_PORT}
 
+; Base de datos
 db_host = False
 db_port = False
 db_user = ${ODOO_DB_USER}
 db_password = ${ODOO_DB_PASS}
-; La base de datos se crea desde el asistente web, no se fija db_name aquí
+; La base se crea SIEMPRE desde el asistente web, no fijamos db_name aquí.
 ; db_name = ${ODOO_DB_NAME}
 
+; Master password (para crear bases desde la web)
 admin_passwd = ${ODOO_ADMIN_PASS}
 
+; Rutas de addons
 addons_path = ${ODOO_HOME}/src/odoo/addons,${ODOO_HOME}/custom-addons
 
+; Modo producción
 workers = 4
 limit_time_cpu = 120
 limit_time_real = 120
 max_cron_threads = 2
 
+; Logs
 logfile = ${LOG_DIR}/odoo19.log
 log_level = info
 limit_time_real_cron = 120
@@ -136,7 +151,7 @@ systemctl daemon-reload
 systemctl enable odoo19
 systemctl start odoo19
 
-msg "Configurando Nginx como reverse proxy para Odoo19 (8069 + websocket/event)..."
+msg "Configurando Nginx como reverse proxy (HTTP 8069 + longpolling 8072)..."
 
 rm -f /etc/nginx/sites-enabled/default || true
 
@@ -147,7 +162,11 @@ fi
 
 cat > /etc/nginx/sites-available/odoo19.conf <<EOF_NGINX
 upstream odoo19_backend {
-    server 127.0.0.1:8069;
+    server 127.0.0.1:${HTTP_PORT};
+}
+
+upstream odoo19_longpolling {
+    server 127.0.0.1:${LONGPOLLING_PORT};
 }
 
 server {
@@ -164,16 +183,21 @@ server {
     proxy_set_header X-Forwarded-Proto \$scheme;
     proxy_set_header X-Real-IP \$remote_addr;
 
-    location /websocket {
-        proxy_pass http://127.0.0.1:8069/websocket;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-
+    # Tráfico HTTP normal (interfaz Odoo)
     location / {
         proxy_pass http://odoo19_backend;
         proxy_redirect off;
+    }
+
+    # Canal de longpolling / bus para notificaciones y conversaciones
+    location /longpolling {
+        proxy_pass http://odoo19_longpolling;
+        proxy_read_timeout 360s;
+        proxy_connect_timeout 360s;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Real-IP \$remote_addr;
     }
 
     access_log /var/log/nginx/odoo19-access.log;
@@ -204,6 +228,10 @@ Base de datos (crear desde asistente web de Odoo):
 
 Odoo admin (master password):
   admin_passwd (odoo.conf): ${ODOO_ADMIN_PASS}
+
+Puertos internos:
+  HTTP:          ${HTTP_PORT}
+  Longpolling:   ${LONGPOLLING_PORT}
 
 Ficheros importantes:
   Config:       ${ODOO_CONF}
