@@ -388,3 +388,4 @@ echo "  http://IP_DEL_LXC/"
 [[ -n "${ODOO_DOMAIN}" ]] && echo "  http://${ODOO_DOMAIN}/"
 echo
 msg "Listo. Ya deberías poder activar Conversaciones en Odoo 19 (websocket/event) de forma 'pro'."
+
