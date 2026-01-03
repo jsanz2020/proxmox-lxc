@@ -152,7 +152,8 @@ echo "  ${RAW_URL}"
 
 LXC_SCRIPT="/root/install-odoo19-pro.sh"
 
-pct exec "$CTID" -- bash -c "apt-get update && apt-get install -y curl wget ca-certificates"
+# IMPORTANTE: aquí añadimos git para el instalador interno
+pct exec "$CTID" -- bash -c "apt-get update && apt-get install -y curl wget ca-certificates git"
 
 pct exec "$CTID" -- bash -c "wget -qO ${LXC_SCRIPT} '${RAW_URL}' || curl -fsSL '${RAW_URL}' -o ${LXC_SCRIPT}"
 
