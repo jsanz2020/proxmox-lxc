@@ -362,9 +362,6 @@ chmod 600 "${CRED_FILE}"
 msg "Credenciales guardadas en ${CRED_FILE}"
 EOF_INNER
 
-
-pct exec "$CTID" -- chmod +x "${LXC_SCRIPT}"
-
 ########################
 # EJECUTAR INSTALADOR  #
 ########################
