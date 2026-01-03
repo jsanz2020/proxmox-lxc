@@ -160,7 +160,7 @@ require_cmd() {
 }
 
 # IMPORTANTE: aquí NO debe aparecer 'pct'
-require_cmd apt-get curl wget openssl git
+inner_require_cmd apt-get curl wget openssl git
 
 ODOO_DOMAIN="${ODOO_DOMAIN:-}"
 ODOO_DB_NAME="${ODOO_DB_NAME:-odoo19}"
