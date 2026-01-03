@@ -165,4 +165,28 @@ pct exec "$CTID" -- bash -c "chmod +x ${LXC_SCRIPT}"
 
 msg "Ejecutando instalador interno de Odoo 19 dentro del LXC..."
 
-pct exec 
+pct exec "$CTID" -- bash -c "export ODOO_DOMAIN='${ODOO_DOMAIN}'; \
+  export ODOO_DB_NAME='${ODOO_DB_NAME}'; \
+  export ODOO_DB_PASS='${DB_PASS}'; \
+  export ODOO_ADMIN_PASS='${ADMIN_PASS}'; \
+  ${LXC_SCRIPT}"
+
+########################
+# RESUMEN FINAL        #
+########################
+
+msg "=== INSTALACIÓN COMPLETADA ==="
+LXC_IP=${IPADDR:-"(DHCP, revisa con 'pct exec ${CTID} -- hostname -I')"}
+echo "CTID:           ${CTID}"
+echo "Hostname:       ${HOSTNAME}"
+echo "IP configurada: ${LXC_IP}"
+echo "Dominio Odoo:   ${ODOO_DOMAIN:-(no configurado, usar IP)}"
+echo
+echo "Dentro del LXC, credenciales en: /root/odoo19-credentials.txt"
+echo "Para ver IP real del LXC: pct exec ${CTID} -- hostname -I"
+echo
+echo "Acceso:"
+echo "  http://IP_DEL_LXC/   --> asistente 'Create Database' (usa la DB ${ODOO_DB_NAME} y master password del fichero de credenciales)"
+[[ -n "${ODOO_DOMAIN}" ]] && echo "  http://${ODOO_DOMAIN}/"
+echo
+msg "Listo. Odoo 19 preparado para crear la base desde el asistente y activar Conversaciones (websocket)."
