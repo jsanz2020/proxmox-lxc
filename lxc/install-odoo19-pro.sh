@@ -215,5 +215,3 @@ EOF_CREDS
 chmod 600 "${CRED_FILE}"
 
 msg "Credenciales guardadas en ${CRED_FILE}"
-
-
