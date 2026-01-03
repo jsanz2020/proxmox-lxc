@@ -24,7 +24,7 @@ ask()  { read -r -p "$1" REPLY; echo "$REPLY"; }
 
 gen_pass() { openssl rand -base64 24 | tr -d '\n'; }
 
-require_cmd() {
+host_require_cmd() {
   for c in "$@"; do
     command -v "$c" >/dev/null 2>&1 || { err "Comando requerido no encontrado: $c"; exit 1; }
   done
@@ -34,7 +34,7 @@ require_cmd() {
 # PRE-CHECKS PROXMOX   #
 ########################
 
-require_cmd pct pveam curl wget openssl
+host_require_cmd pct pveam curl wget openssl
 
 if ! pveversion >/dev/null 2>&1; then
   err "Este script debe ejecutarse en un nodo Proxmox VE."
@@ -165,31 +165,4 @@ pct exec "$CTID" -- bash -c "chmod +x ${LXC_SCRIPT}"
 
 msg "Ejecutando instalador interno de Odoo 19 dentro del LXC..."
 
-pct exec "$CTID" -- bash -c "
-  export ODOO_DOMAIN='${ODOO_DOMAIN}'
-  export ODOO_DB_NAME='${ODOO_DB_NAME}'
-  export ODOO_DB_PASS='${DB_PASS}'
-  export ODOO_ADMIN_PASS='${ADMIN_PASS}'
-  ${LXC_SCRIPT}
-"
-
-########################
-# RESUMEN FINAL        #
-########################
-
-msg "=== INSTALACIÓN COMPLETADA ==="
-LXC_IP=${IPADDR:-"(DHCP, revisa con 'pct exec ${CTID} -- hostname -I')"}
-echo "CTID:           ${CTID}"
-echo "Hostname:       ${HOSTNAME}"
-echo "IP configurada: ${LXC_IP}"
-echo "Dominio Odoo:   ${ODOO_DOMAIN:-(no configurado, usar IP)}"
-echo
-echo "Dentro del LXC, credenciales en: /root/odoo19-credentials.txt"
-echo "Para ver IP real del LXC: pct exec ${CTID} -- hostname -I"
-echo
-echo "Acceso (cuando resuelva el DNS o por IP):"
-echo "  http://IP_DEL_LXC/"
-[[ -n "${ODOO_DOMAIN}" ]] && echo "  http://${ODOO_DOMAIN}/"
-echo
-msg "Listo. Entorno Odoo 19 'pro' con Conversaciones (websocket/event) preparado."
-
+pct exec 
