@@ -43,13 +43,14 @@ apt-get update
 apt-get -y full-upgrade
 
 msg "Instalando paquetes base y dependencias Odoo 19..."
+# WKHTML_PKG removed: no package in Debian 13 main
 apt-get install -y sudo gnupg2 ca-certificates lsb-release locales \
   curl wget git \
   python3 python3-venv python3-pip build-essential \
   libxml2-dev libxslt1-dev libldap2-dev libsasl2-dev \
   libjpeg-dev libpq-dev libffi-dev libssl-dev zlib1g-dev \
   postgresql postgresql-contrib \
-  nginx ${WKHTML_PKG}
+  nginx 
 
 msg "Configurando locale..."
 sed -i 's/^# *es_ES.UTF-8/es_ES.UTF-8/' /etc/locale.gen
