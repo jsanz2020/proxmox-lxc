@@ -29,7 +29,7 @@ Si no sale nada, tu Proxmox aún no la tiene y el script se parará avisando.
 
 ---
 
-## Caso A — Instalación normal (ficheros ya en `main`)
+ — Instalación normal (ficheros ya en `main`)
 
 Es el caso definitivo, una vez hayas fusionado los cambios a `main`.
 
@@ -56,25 +56,6 @@ Verás mensajes `[INFO]` y `[ODOO-SETUP]` conforme avanza.
 
 **5. Crea la base de datos** desde el navegador (paso 5 detallado abajo).
 
----
-
-## Caso B — Probar desde una rama sin fusionar
-
-Mismo procedimiento, pero apuntando a la rama. Hay que cambiar **dos cosas**:
-la URL desde la que descargas el script, y la variable `GITHUB_BRANCH` que le
-dice de dónde bajar el instalador interno.
-
-```bash
-RAMA="claude/revisar-contenedores-u32693"
-
-# 1. Descargar el script del host DESDE LA RAMA
-wget -O odoo19-all-in-one.sh \
-  "https://raw.githubusercontent.com/jsanz2020/proxmox-lxc/refs/heads/${RAMA}/proxmox/odoo19-all-in-one.sh"
-chmod +x odoo19-all-in-one.sh
-
-# 2. Ejecutarlo diciéndole que el instalador interno también está en la rama
-GITHUB_BRANCH="refs/heads/${RAMA}" ./odoo19-all-in-one.sh
-```
 
 > **Por qué `refs/heads/`**: esta rama lleva barras en el nombre
 > (`claude/revisar-...`), y en una URL de `raw.githubusercontent.com` eso es
