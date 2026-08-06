@@ -1,0 +1,1 @@
+lxc:  script no se ejecuta solo. Espera ODOO_DB_PASS y ODOO_ADMIN_PASS en el entorno (aborta si faltan) y opcionalmente ODOO_DOMAIN, ODOO_DB_NAME, ODOO_WORKERS, INSTALL_WKHTMLTOPDF. Se las pasa odoo19-all-in-one.sh.
